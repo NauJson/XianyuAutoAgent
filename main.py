@@ -8,7 +8,7 @@ from loguru import logger
 from dotenv import load_dotenv
 from XianyuApis import XianyuApis
 import sys
-
+import ast
 
 from utils.xianyu_utils import generate_mid, generate_uuid, trans_cookies, generate_device_id, decrypt
 from XianyuAgent import XianyuReplyBot
@@ -330,24 +330,43 @@ class XianyuLive:
             except Exception as e:
                 logger.error(f"消息解密失败: {e}")
                 return
+            
+            logger.info(f"lianyao-input-message: {message}")
 
             try:
-                # 判断是否为订单消息,需要自行编写付款后的逻辑
-                if message['3']['redReminder'] == '等待买家付款':
-                    user_id = message['1'].split('@')[0]
-                    user_url = f'https://www.goofish.com/personal?userId={user_id}'
-                    logger.info(f'等待买家 {user_url} 付款')
-                    return
-                elif message['3']['redReminder'] == '交易关闭':
-                    user_id = message['1'].split('@')[0]
-                    user_url = f'https://www.goofish.com/personal?userId={user_id}'
-                    logger.info(f'买家 {user_url} 交易关闭')
-                    return
-                elif message['3']['redReminder'] == '等待卖家发货':
-                    user_id = message['1'].split('@')[0]
-                    user_url = f'https://www.goofish.com/personal?userId={user_id}'
-                    logger.info(f'交易成功 {user_url} 等待卖家发货')
-                    return
+                # 字符串转字典
+                # redReminder =     message["1"]['10']['redReminder'] or message["3"]['redReminder']
+                # 获取 redReminder
+                red_reminder = message.get('3', {}).get('redReminder') or  message.get('1', {}).get('10', {}).get('redReminder')
+                # 获取redReminder字段，如果不存在则跳过订单状态判断
+                # red_reminder = message.get('1', {}).get('10', {}).get('redReminder') or message.get('3', {}).get('redReminder')
+                if red_reminder:
+                    # 根据订单状态进行处理
+                    if red_reminder == '等待买家付款':
+                        logger.info('等待买家付款')
+                        return
+                    elif red_reminder == '交易关闭':
+                        logger.info('买家交易关闭')
+                        return
+                    # 提醒发货的时候是这个消息
+                    elif red_reminder == '等待卖家发货':
+                        logger.info('交易成功,等待卖家发货')
+                        try:
+                            # 获取商品ID和会话ID
+                            url_info = message.get("1", {}).get("10", {}).get("reminderUrl")
+                            item_id = url_info.split("itemId=")[1].split("&")[0] if url_info and "itemId=" in url_info else None
+                            chat_id = message.get("1", {}).get("2", "").split('@')[0] if message.get("1", {}).get("2") else None
+                            send_user_id = message.get("1", {}).get("10", {}).get("senderUserId")
+
+                            if not item_id:
+                                logger.warning("无法获取商品ID")
+                                return
+                            send_message = '请输入抖音视频链接，系统会自动给你无水印视频下载地址'
+                            self.context_manager.add_message_by_chat(chat_id, self.myid, item_id, "assistant", send_message)
+                            await self.send_msg(websocket, chat_id, send_user_id, send_message)
+                        except Exception as e:
+                            logger.error(f"发送消息失败: {e}")
+                        return
 
             except:
                 pass
@@ -364,22 +383,25 @@ class XianyuLive:
             # 处理聊天消息
             create_time = int(message["1"]["5"])
             send_user_name = message["1"]["10"]["reminderTitle"]
-            send_user_id = message["1"]["10"]["senderUserId"]
             send_message = message["1"]["10"]["reminderContent"]
-            
+            # 获取商品ID和会话ID
+            url_info = message["1"]["10"]["reminderUrl"]
+            item_id = url_info.split("itemId=")[1].split("&")[0] if "itemId=" in url_info else None
+            chat_id = message["1"]["2"].split('@')[0]
+            send_user_id = message["1"]["10"]["senderUserId"]
+
+            if not item_id:
+                logger.warning("无法获取商品ID")
+                return
+
+
+
             # 时效性验证（过滤5分钟前消息）
             if (time.time() * 1000 - create_time) > self.message_expire_time:
                 logger.debug("过期消息丢弃")
                 return
                 
-            # 获取商品ID和会话ID
-            url_info = message["1"]["10"]["reminderUrl"]
-            item_id = url_info.split("itemId=")[1].split("&")[0] if "itemId=" in url_info else None
-            chat_id = message["1"]["2"].split('@')[0]
-            
-            if not item_id:
-                logger.warning("无法获取商品ID")
-                return
+
 
             # 检查是否为卖家（自己）发送的控制命令
             if send_user_id == self.myid:
@@ -411,36 +433,33 @@ class XianyuLive:
                 logger.debug("系统消息，跳过处理")
                 return
             # 从数据库中获取商品信息，如果不存在则从API获取并保存
-            item_info = self.context_manager.get_item_info(item_id)
-            if not item_info:
-                logger.info(f"从API获取商品信息: {item_id}")
-                api_result = self.xianyu.get_item_info(item_id)
-                if 'data' in api_result and 'itemDO' in api_result['data']:
-                    item_info = api_result['data']['itemDO']
-                    # 保存商品信息到数据库
-                    self.context_manager.save_item_info(item_id, item_info)
-                else:
-                    logger.warning(f"获取商品信息失败: {api_result}")
-                    return
-            else:
-                logger.info(f"从数据库获取商品信息: {item_id}")
+            # logger.info(f"从API获取商品信息: {item_id}")
+            # api_result = self.xianyu.get_item_info(item_id)
+            # if 'data' in api_result and 'itemDO' in api_result['data']:
+            #     item_info = api_result['data']['itemDO']
+            #     logger.info(f"从API获取商品信息: {item_info}")
+            #     # 保存商品信息到数据库
+            #     self.context_manager.save_item_info(item_id, item_info)
+            # else:
+            #     logger.warning(f"获取商品信息失败: {api_result}")
+            #     return
                 
-            item_description = f"{item_info['desc']};当前商品售卖价格为:{str(item_info['soldPrice'])}"
+            # item_description = f"{item_info['desc']};当前商品售卖价格为:{str(item_info['soldPrice'])}"
             
             # 获取完整的对话上下文
             context = self.context_manager.get_context_by_chat(chat_id)
             # 生成回复
-            bot_reply = bot.generate_reply(
-                send_message,
-                item_description,
-                context=context
-            )
-            
-            # 检查是否为价格意图，如果是则增加议价次数
-            if bot.last_intent == "price":
-                self.context_manager.increment_bargain_count_by_chat(chat_id)
-                bargain_count = self.context_manager.get_bargain_count_by_chat(chat_id)
-                logger.info(f"用户 {send_user_name} 对商品 {item_id} 的议价次数: {bargain_count}")
+            # bot_reply = bot.generate_reply(
+            #     send_message,
+            #     '光猫桥接服务10元',
+            #     context=context
+            # )
+            bot_reply = '24h自动发货，请放心购买。'
+            # # 检查是否为价格意图，如果是则增加议价次数
+            # if bot.last_intent == "price":
+            #     self.context_manager.increment_bargain_count_by_chat(chat_id)
+            #     bargain_count = self.context_manager.get_bargain_count_by_chat(chat_id)
+            #     logger.info(f"用户 {send_user_name} 对商品 {item_id} 的议价次数: {bargain_count}")
             
             # 添加机器人回复到上下文
             self.context_manager.add_message_by_chat(chat_id, self.myid, item_id, "assistant", bot_reply)
@@ -566,7 +585,7 @@ class XianyuLive:
                                     if key in message_data["headers"]:
                                         ack["headers"][key] = message_data["headers"][key]
                                 await websocket.send(json.dumps(ack))
-                            
+                
                             # 处理其他消息
                             await self.handle_message(message_data, websocket)
                                 
