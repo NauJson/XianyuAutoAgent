@@ -405,7 +405,7 @@ class XianyuLive:
                 if match:
                     douyin_url = match.group(1)
                 if douyin_url:
-                    reply_url = f"http://0.0.0.0/api/download?url={douyin_url}&prefix=true&with_watermark=false"
+                    reply_url = f"http://dy.lzdll6.fun:8000/api/download?url={douyin_url}&prefix=true&with_watermark=false"
                     await self.send_msg(websocket, chat_id, send_user_id, reply_url)
                     return
 
