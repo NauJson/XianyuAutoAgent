@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from XianyuApis import XianyuApis
 import sys
 import ast
+import re
 
 from utils.xianyu_utils import generate_mid, generate_uuid, trans_cookies, generate_device_id, decrypt
 from XianyuAgent import XianyuReplyBot
@@ -361,6 +362,8 @@ class XianyuLive:
                             if not item_id:
                                 logger.warning("无法获取商品ID")
                                 return
+                            # 写入数据库，标记用户已购买该商品
+                            self.context_manager.add_purchase_record(send_user_id, item_id)
                             send_message = '请输入抖音视频链接，系统会自动给你无水印视频下载地址'
                             self.context_manager.add_message_by_chat(chat_id, self.myid, item_id, "assistant", send_message)
                             await self.send_msg(websocket, chat_id, send_user_id, send_message)
@@ -394,7 +397,17 @@ class XianyuLive:
                 logger.warning("无法获取商品ID")
                 return
 
-
+            # 检查用户是否已购买该商品，且消息中包含抖音链接
+            if self.context_manager.has_user_bought_item(send_user_id, item_id):
+                # 匹配抖音链接
+                douyin_url = None
+                match = re.search(r'(https?://v\.douyin\.com/[^\s]+)', send_message)
+                if match:
+                    douyin_url = match.group(1)
+                if douyin_url:
+                    reply_url = f"http://0.0.0.0/api/download?url={douyin_url}&prefix=true&with_watermark=false"
+                    await self.send_msg(websocket, chat_id, send_user_id, reply_url)
+                    return
 
             # 时效性验证（过滤5分钟前消息）
             if (time.time() * 1000 - create_time) > self.message_expire_time:

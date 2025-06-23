@@ -88,6 +88,24 @@ class ChatContextManager:
         )
         ''')
         
+        # 创建购买记录表
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS purchase_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            item_id TEXT NOT NULL,
+            purchase_time DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        ''')
+        
+        # 为 user_id 和 item_id 创建索引
+        cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_purchase_user_id ON purchase_records (user_id)
+        ''')
+        cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_purchase_item_id ON purchase_records (item_id)
+        ''')
+        
         conn.commit()
         conn.close()
         logger.info(f"聊天历史数据库初始化完成: {self.db_path}")
@@ -305,5 +323,54 @@ class ChatContextManager:
         except Exception as e:
             logger.error(f"获取议价次数时出错: {e}")
             return 0
+        finally:
+            conn.close()
+
+    def has_user_bought_item(self, user_id, item_id):
+        """
+        判断用户是否购买过某商品
+        Args:
+            user_id: 用户ID
+            item_id: 商品ID
+        Returns:
+            bool: 如果用户有该商品的购买记录则认为已购买
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT 1 FROM purchase_records WHERE user_id = ? AND item_id = ? LIMIT 1",
+                (user_id, item_id)
+            )
+            result = cursor.fetchone()
+            return result is not None
+        except Exception as e:
+            logger.error(f"查询用户购买记录时出错: {e}")
+            return False
+        finally:
+            conn.close()
+
+    def add_purchase_record(self, user_id, item_id):
+        """
+        创建一条购买记录
+        Args:
+            user_id: 用户ID
+            item_id: 商品ID
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                INSERT INTO purchase_records (user_id, item_id, purchase_time)
+                VALUES (?, ?, ?)
+                """,
+                (user_id, item_id, datetime.now().isoformat())
+            )
+            conn.commit()
+            logger.debug(f"购买记录已添加: user_id={user_id}, item_id={item_id}")
+        except Exception as e:
+            logger.error(f"添加购买记录时出错: {e}")
+            conn.rollback()
         finally:
             conn.close() 
